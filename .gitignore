@@ -1,0 +1,24 @@
+# OS
+.DS_Store
+Thumbs.db
+
+# Node/npm (if used later)
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# Composer (if added later)
+vendor/
+composer.lock
+
+# IDE
+.idea/
+.vscode/
+*.code-workspace
+
+# WordPress build artifacts
+*.zip
+*.log
+/.wordpress-org/
+
