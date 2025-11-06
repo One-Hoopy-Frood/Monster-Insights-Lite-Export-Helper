@@ -3,7 +3,7 @@
 Plugin Name: MI Data Exports
 Plugin URI: https://github.com/One-Hoopy-Frood/Monster-Insights-Lite-Export-Helper
 Description: Early helper plugin to assist with exporting MonsterInsights Lite data. Work in progress.
-Version: 0.1.0
+Version: 0.2.0
 Author: Your Name
 Author URI: https://example.com
 License: MIT
@@ -18,7 +18,7 @@ if (!defined('ABSPATH')) {
     exit; // Exit if accessed directly.
 }
 
-define('MIHR_VERSION', '0.1.0');
+define('MIHR_VERSION', '0.2.0');
 define('MIHR_PLUGIN_FILE', __FILE__);
 define('MIHR_PLUGIN_DIR', plugin_dir_path(__FILE__));
 define('MIHR_PLUGIN_URL', plugin_dir_url(__FILE__));
