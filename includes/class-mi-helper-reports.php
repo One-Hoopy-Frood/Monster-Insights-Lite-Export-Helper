@@ -248,6 +248,7 @@ class MI_Helper_Reports
             </form>
 
             <div id="mihr-status" style="margin-top:10px;"></div>
+            <div id="mihr-column-controls" class="mihr-column-controls" style="margin-top:10px;"></div>
             <div id="mihr-results" style="margin-top:20px;"></div>
         </div>
 
@@ -260,6 +261,7 @@ class MI_Helper_Reports
           const selectAll  = document.getElementById('mihr-select-all');
           const metricBoxes= Array.from(document.querySelectorAll('.mihr-metric'));
           const reportInput= document.getElementById('mihr-report');
+          const columnControls = document.getElementById('mihr-column-controls');
 
           const settings = window.mihrSettings || {};
           const strings = settings.strings || {};
@@ -268,6 +270,26 @@ class MI_Helper_Reports
           function esc(s){ return (''+s).replace(/[&<>"']/g, m=>({ '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;','\'':'&#39;' }[m])); }
           function toNumber(x){ const n = typeof x === 'string' ? x.replace(/,/g,'').trim() : x; const f = parseFloat(n); return isFinite(f) ? f : null; }
           function toISODate(unix){ if (!unix) return ''; const d=new Date(unix*1000); const m=String(d.getMonth()+1).padStart(2,'0'); const day=String(d.getDate()).padStart(2,'0'); return d.getFullYear()+'-'+m+'-'+day; }
+          function columnSlug(label){
+            return label.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '') || 'col';
+          }
+          function ensureColumnSlug(label, slugMap){
+            if (slugMap[label]) {
+              return slugMap[label];
+            }
+            const used = new Set(Object.values(slugMap));
+            let base = columnSlug(label);
+            if (!base) {
+              base = 'col';
+            }
+            let slug = base;
+            let counter = 2;
+            while (used.has(slug)) {
+              slug = `${base}-${counter++}`;
+            }
+            slugMap[label] = slug;
+            return slug;
+          }
 
           if (selectAll) {
             selectAll.addEventListener('change', () => {
@@ -292,19 +314,34 @@ class MI_Helper_Reports
             const a = document.createElement('a'); a.href = url; a.download = name;
             document.body.appendChild(a); a.click(); URL.revokeObjectURL(url); a.remove();
           }
-          function renderTable(title, rows){
-            if (!rows || !rows.length) return { html:'', csv:'' };
+          function renderTable(title, rows, slugMap){
+            if (!rows || !rows.length) {
+              return { html: '', csv: '', columns: [] };
+            }
+
             const cols = colsFromRows(rows);
+            const columnMeta = cols.map((label, index) => {
+              const slug = ensureColumnSlug(label, slugMap || {});
+              return { label, slug: slug || `col-${index}` };
+            });
+
+            const header = columnMeta.map(col => `<th class="mihr-col-${col.slug}" data-column="${esc(col.label)}">${esc(col.label)}</th>`).join('');
+            const body = rows.map(r => {
+              const cells = columnMeta.map(col => `<td class="mihr-col-${col.slug}">${esc(r[col.label] ?? '')}</td>`).join('');
+              return `<tr>${cells}</tr>`;
+            }).join('');
+
             const html = [
               '<h3 style="margin-top:1.2em;">'+esc(title)+'</h3>',
-              '<table class="widefat striped"><thead><tr>',
-              cols.map(c=>'<th>'+esc(c)+'</th>').join(''),
+              '<table class="widefat striped mihr-data-table"><thead><tr>',
+              header,
               '</tr></thead><tbody>',
-              rows.map(r=>'<tr>'+cols.map(c=>'<td>'+esc(r[c] ?? '')+'</td>').join('')+'</tr>').join(''),
+              body,
               '</tbody></table>'
             ].join('');
+
             const csv = makeCSV(rows, cols);
-            return { html, csv };
+            return { html, csv, columns: columnMeta };
           }
 
           function buildSections(d){
@@ -338,12 +375,20 @@ class MI_Helper_Reports
                   title: 'Top 5 Website Pages (overall)',
                   rows: summaryRows,
                   summaryHtml: summaryText,
-                  emptyText: summaryRows.length ? '' : noTopPagesText
+                  emptyText: summaryRows.length ? '' : noTopPagesText,
+                  notes: [ 'Totals reflect aggregated top-five pages across the selected period.' ]
                 });
               }
 
               const emptyText = allRows.length ? '' : noTopPagesText;
-              sections.push({ key:'top-pages', title:'Top 5 Website Pages (monthly)', rows: allRows, summaryHtml: '', emptyText });
+              sections.push({
+                key:'top-pages',
+                title:'Top 5 Website Pages (monthly)',
+                rows: allRows,
+                summaryHtml: '',
+                emptyText,
+                notes: [ 'Monthly breakdown is limited to the top five pages reported by MonsterInsights for each month.' ]
+              });
               return sections;
             }
 
@@ -430,8 +475,18 @@ class MI_Helper_Reports
           function renderSections(sections){
             const parts = [];
             const csvMap = {};
+            const columnsMap = {};
+            const slugMap = {};
             sections.forEach(sec => {
-              const { html, csv } = renderTable(sec.title, sec.rows);
+              const tableData = renderTable(sec.title, sec.rows, slugMap);
+              const { html, csv, columns } = tableData;
+              if (Array.isArray(columns)) {
+                columns.forEach(col => {
+                  if (!columnsMap[col.slug]) {
+                    columnsMap[col.slug] = col.label;
+                  }
+                });
+              }
               const summary = sec.summaryHtml || '';
               const notes = Array.isArray(sec.notes) ? sec.notes.map(note => `<p>${esc(note)}</p>`).join('') : '';
               const header = summary + notes;
@@ -459,12 +514,67 @@ class MI_Helper_Reports
               })
               .join('\n\n');
 
-            return { html: parts.join(''), combinedCSV: combined };
+          return { html: parts.join(''), combinedCSV: combined, columns: columnsMap };
+          }
+
+          function setupColumnControls(columns){
+            if (!columnControls) {
+              return;
+            }
+
+            columnControls.innerHTML = '';
+            const entries = Object.entries(columns || {});
+            if (!entries.length) {
+              columnControls.style.display = 'none';
+              return;
+            }
+
+            columnControls.style.display = '';
+
+            const wrapper = document.createElement('div');
+            wrapper.className = 'mihr-column-toggle-list';
+
+            const heading = document.createElement('strong');
+            heading.textContent = 'Columns:';
+            heading.style.marginRight = '8px';
+            wrapper.appendChild(heading);
+
+            entries.forEach(([slug, label]) => {
+              const controlLabel = document.createElement('label');
+              controlLabel.style.marginRight = '16px';
+
+              const checkbox = document.createElement('input');
+              checkbox.type = 'checkbox';
+              checkbox.checked = true;
+              checkbox.dataset.columnSlug = slug;
+              controlLabel.appendChild(checkbox);
+              controlLabel.appendChild(document.createTextNode(' ' + label));
+
+              wrapper.appendChild(controlLabel);
+            });
+
+            columnControls.appendChild(wrapper);
+
+            function applyVisibility() {
+              entries.forEach(([slug]) => {
+                const isChecked = columnControls.querySelector(`input[data-column-slug="${slug}"]`)?.checked !== false;
+                document.querySelectorAll(`.mihr-col-${slug}`).forEach(element => {
+                  element.style.display = isChecked ? '' : 'none';
+                });
+              });
+            }
+
+            columnControls.querySelectorAll('input[data-column-slug]').forEach(input => {
+              input.addEventListener('change', applyVisibility);
+            });
+
+            applyVisibility();
           }
 
           async function doFetch(downloadAll){
             statusEl.textContent = 'Fetching…';
             resultsEl.innerHTML = '';
+            setupColumnControls({});
 
             const selectedMetrics = metricBoxes.filter(cb => cb.checked).map(cb => cb.value);
             const payload = new URLSearchParams();
@@ -480,6 +590,7 @@ class MI_Helper_Reports
 
             if (!data || !data.success) {
               statusEl.innerHTML = '<span style="color:#b00;">' + esc((data && data.data) || 'Request failed') + '</span>';
+              setupColumnControls({});
               return;
             }
             statusEl.textContent = 'OK';
@@ -490,11 +601,13 @@ class MI_Helper_Reports
             if (!sections.length){
               resultsEl.innerHTML = '<pre style="max-height:480px;overflow:auto;">' + esc(JSON.stringify(d, null, 2)) + '</pre>';
               if (downloadAll) downloadCSV(JSON.stringify(d, null, 2), 'mi-raw.json');
+              setupColumnControls({});
               return;
             }
 
-            const { html, combinedCSV } = renderSections(sections);
+            const { html, combinedCSV, columns } = renderSections(sections);
             resultsEl.innerHTML = html;
+            setupColumnControls(columns);
 
             if (downloadAll && combinedCSV){
               downloadCSV(combinedCSV, 'mi-all.csv');
@@ -1051,6 +1164,9 @@ class MI_Helper_Reports
                 'pageviews',
                 'engagedSessions',
             ]),
+            'notes' => [
+                __('If prior-period data cannot be retrieved, change values will remain blank.', 'mi-helper-reports'),
+            ],
         ];
 
         $sections[] = [
