@@ -535,7 +535,7 @@ class MI_Helper_Reports
             wrapper.className = 'mihr-column-toggle-list';
 
             const heading = document.createElement('strong');
-            heading.textContent = 'Columns:';
+            heading.textContent = '<?php echo esc_js(__('Columns:', 'mi-helper-reports')); ?>';
             heading.style.marginRight = '8px';
             wrapper.appendChild(heading);
 
@@ -896,25 +896,35 @@ class MI_Helper_Reports
         $sections = [];
         $period_summary = $this->format_period_summary($start, $end);
 
+        [$current_label, $previous_label] = $this->build_period_labels($start, $end, $range);
+
         $sections[] = [
             'key'     => 'traffic-overview-headline',
-            'title'   => __('Overall Visits', 'mi-helper-reports'),
+            'title'   => sprintf(
+                __('Overall Visits (%s vs %s)', 'mi-helper-reports'),
+                $this->format_range_label($start, $end),
+                $range ? $this->format_range_label($range['start'], $range['end']) : __('Previous period', 'mi-helper-reports')
+            ),
             'summary' => $period_summary,
             'rows'    => $this->build_metric_comparison_rows($current, $previous, [
                 'sessions',
                 'totalusers',
                 'pageviews',
-            ]),
+            ], $current_label, $previous_label),
         ];
 
         $sections[] = [
             'key'   => 'traffic-overview-engagement',
-            'title' => __('Engagement Pulse', 'mi-helper-reports'),
+            'title' => sprintf(
+                __('Engagement Pulse (%s vs %s)', 'mi-helper-reports'),
+                $this->format_range_label($start, $end),
+                $range ? $this->format_range_label($range['start'], $range['end']) : __('Previous period', 'mi-helper-reports')
+            ),
             'rows'  => $this->build_metric_comparison_rows($current, $previous, [
                 'duration',
                 'bounce_rate',
                 'engagedSessions',
-            ]),
+            ], $current_label, $previous_label),
             'notes' => [
                 __('Average session duration is reported in MonsterInsights format. Percentage change compares the selected period with the prior period.', 'mi-helper-reports'),
             ],
@@ -925,6 +935,9 @@ class MI_Helper_Reports
             'title' => __('Device Mix', 'mi-helper-reports'),
             'rows'  => $this->build_device_rows($current),
             'emptyText' => __('Device share information is unavailable for the selected period.', 'mi-helper-reports'),
+            'notes' => [
+                __('Percentages are supplied by MonsterInsights and may not total 100% when rounding is applied.', 'mi-helper-reports'),
+            ],
         ];
 
         return [
@@ -968,7 +981,7 @@ class MI_Helper_Reports
                     'rows'      => $rows,
                     'emptyText' => __('Channel shares could not be calculated from the available data.', 'mi-helper-reports'),
                     'notes'     => [
-                        __('Social and referral shares are estimated from the top referral sources. Direct/Other is computed as remaining traffic.', 'mi-helper-reports'),
+                        __('Social and referral shares are estimated from the top referral sources. Direct/Other is computed as remaining traffic when MonsterInsights Lite does not expose full channel data.', 'mi-helper-reports'),
                     ],
                 ],
             ],
@@ -1012,7 +1025,7 @@ class MI_Helper_Reports
                     'rows'      => $rows,
                     'emptyText' => __('No social traffic was detected for the selected period.', 'mi-helper-reports'),
                     'notes'     => [
-                        __('Social traffic is approximated from referral hosts for popular social networks.', 'mi-helper-reports'),
+                        __('Social traffic is approximated from referral hosts for popular social networks; traffic from other networks is included in Direct / Other.', 'mi-helper-reports'),
                     ],
                 ],
             ],
@@ -1034,7 +1047,7 @@ class MI_Helper_Reports
         $rows = [];
         if (!empty($current['referrals']) && is_array($current['referrals'])) {
             foreach ($current['referrals'] as $entry) {
-                $host = $this->parse_host($entry['url'] ?? '');
+                $host = $this->parse_host($entry['url'] ?? '') ?: strtolower($entry['hostname'] ?? '');
                 if ($host === '' || $this->is_social_host($host)) {
                     continue;
                 }
@@ -1046,7 +1059,7 @@ class MI_Helper_Reports
 
                 $rows[] = [
                     'referrer' => $host,
-                    'url'      => $entry['url'] ?? '',
+                    'url'      => $entry['url'] ?? ($entry['hostname'] ?? ''),
                     'sessions' => $this->format_number($sessions),
                 ];
             }
@@ -1061,6 +1074,9 @@ class MI_Helper_Reports
                     'summary'   => $this->format_period_summary($start, $end),
                     'rows'      => $rows,
                     'emptyText' => __('No referral partners were returned for the selected period.', 'mi-helper-reports'),
+                    'notes'     => [
+                        __('Referral data is based on the top sources provided by MonsterInsights; long-tail referrers may be omitted.', 'mi-helper-reports'),
+                    ],
                 ],
             ],
         ];
@@ -1121,6 +1137,7 @@ class MI_Helper_Reports
                     'rows'    => $rows,
                     'notes'   => [
                         __('Sessions and pageviews reflect MonsterInsights overview data for the selected period.', 'mi-helper-reports'),
+                        __('Published post count is derived from WordPress posts with the “post” type and status “publish”.', 'mi-helper-reports'),
                     ],
                 ],
             ],
@@ -1154,16 +1171,22 @@ class MI_Helper_Reports
 
         $sections = [];
 
+        [$current_label, $previous_label] = $this->build_period_labels($start, $end, $range);
+
         $sections[] = [
             'key'   => 'comparative-headline',
-            'title' => __('Period vs. Previous', 'mi-helper-reports'),
+            'title' => sprintf(
+                __('Period vs. Previous (%s vs %s)', 'mi-helper-reports'),
+                $this->format_range_label($start, $end),
+                $range ? $this->format_range_label($range['start'], $range['end']) : __('Previous period', 'mi-helper-reports')
+            ),
             'summary' => $this->format_period_summary($start, $end),
             'rows'  => $this->build_metric_comparison_rows($current, $previous, [
                 'sessions',
                 'totalusers',
                 'pageviews',
                 'engagedSessions',
-            ]),
+            ], $current_label, $previous_label),
             'notes' => [
                 __('If prior-period data cannot be retrieved, change values will remain blank.', 'mi-helper-reports'),
             ],
@@ -1171,18 +1194,29 @@ class MI_Helper_Reports
 
         $sections[] = [
             'key'   => 'comparative-engagement',
-            'title' => __('Engagement & Quality', 'mi-helper-reports'),
+            'title' => sprintf(
+                __('Engagement & Quality (%s vs %s)', 'mi-helper-reports'),
+                $this->format_range_label($start, $end),
+                $range ? $this->format_range_label($range['start'], $range['end']) : __('Previous period', 'mi-helper-reports')
+            ),
             'rows'  => $this->build_metric_comparison_rows($current, $previous, [
                 'duration',
                 'bounce_rate',
                 'new_users',
-            ]),
+            ], $current_label, $previous_label),
         ];
 
         $sections[] = [
             'key'   => 'comparative-new-vs-returning',
-            'title' => __('New vs. Returning Visitors', 'mi-helper-reports'),
-            'rows'  => $this->build_new_vs_returning_rows($current, $previous),
+            'title' => sprintf(
+                __('New vs. Returning Visitors (%s vs %s)', 'mi-helper-reports'),
+                $this->format_range_label($start, $end),
+                $range ? $this->format_range_label($range['start'], $range['end']) : __('Previous period', 'mi-helper-reports')
+            ),
+            'rows'  => $this->build_new_vs_returning_rows($current, $previous, $current_label, $previous_label),
+            'notes' => [
+                __('Percentages represent the share of total sessions reported by MonsterInsights for each period.', 'mi-helper-reports'),
+            ],
         ];
 
         return [
@@ -1338,7 +1372,29 @@ class MI_Helper_Reports
         );
     }
 
-    private function build_metric_comparison_rows(?array $current, ?array $previous, array $keys): array
+    private function format_range_label(string $start, string $end): string
+    {
+        $start_obj = $this->create_date_from_string($start);
+        $end_obj   = $this->create_date_from_string($end);
+
+        if (!$start_obj || !$end_obj) {
+            return __('Unknown range', 'mi-helper-reports');
+        }
+
+        return sprintf('%s – %s', $start_obj->format('Y-m-d'), $end_obj->format('Y-m-d'));
+    }
+
+    private function build_period_labels(string $start, string $end, ?array $previous_range): array
+    {
+        $current_label = sprintf(__('Current (%s)', 'mi-helper-reports'), $this->format_range_label($start, $end));
+        $previous_label = $previous_range
+            ? sprintf(__('Previous (%s)', 'mi-helper-reports'), $this->format_range_label($previous_range['start'], $previous_range['end']))
+            : __('Previous', 'mi-helper-reports');
+
+        return [$current_label, $previous_label];
+    }
+
+    private function build_metric_comparison_rows(?array $current, ?array $previous, array $keys, ?string $current_label = null, ?string $previous_label = null): array
     {
         $labels = [
             'sessions'        => __('Sessions', 'mi-helper-reports'),
@@ -1350,6 +1406,10 @@ class MI_Helper_Reports
             'new_users'       => __('New users', 'mi-helper-reports'),
         ];
 
+        $current_label = $current_label ?? __('Current', 'mi-helper-reports');
+        $previous_label = $previous_label ?? __('Previous', 'mi-helper-reports');
+        $change_label = __('Change', 'mi-helper-reports');
+
         $rows = [];
         foreach ($keys as $key) {
             $label = $labels[$key] ?? ucfirst(str_replace('_', ' ', $key));
@@ -1360,9 +1420,9 @@ class MI_Helper_Reports
 
             $rows[] = [
                 'metric'   => $label,
-                'current'  => $current_display,
-                'previous' => $previous_display,
-                'change'   => $change,
+                $current_label  => $current_display,
+                $previous_label => $previous_display,
+                $change_label   => $change,
             ];
         }
 
@@ -1394,7 +1454,7 @@ class MI_Helper_Reports
         $referral_total = 0.0;
         if (!empty($current['referrals']) && is_array($current['referrals'])) {
             foreach ($current['referrals'] as $entry) {
-                $host = $this->parse_host($entry['url'] ?? '');
+                $host = $this->parse_host($entry['url'] ?? '') ?: strtolower($entry['hostname'] ?? '');
                 if ($host === '' || $this->is_social_host($host)) {
                     continue;
                 }
@@ -1429,7 +1489,7 @@ class MI_Helper_Reports
 
         if (!empty($current['referrals']) && is_array($current['referrals'])) {
             foreach ($current['referrals'] as $entry) {
-                $host = $this->parse_host($entry['url'] ?? '');
+                $host = $this->parse_host($entry['url'] ?? '') ?: strtolower($entry['hostname'] ?? '');
                 if ($host === '') {
                     continue;
                 }
@@ -1462,11 +1522,15 @@ class MI_Helper_Reports
         }
 
         $parts = wp_parse_url($url);
-        if (!isset($parts['host'])) {
-            return '';
+        if (is_array($parts) && isset($parts['host'])) {
+            return strtolower($parts['host']);
         }
 
-        return strtolower($parts['host']);
+        if (strpos($url, '/') === false && strpos($url, ' ') === false) {
+            return strtolower($url);
+        }
+
+        return '';
     }
 
     private function is_social_host(string $host): bool
@@ -1479,11 +1543,13 @@ class MI_Helper_Reports
         $map = [
             'facebook.com'      => 'Facebook',
             'm.facebook.com'    => 'Facebook',
+            'lm.facebook.com'   => 'Facebook',
             'l.facebook.com'    => 'Facebook',
             'web.facebook.com'  => 'Facebook',
             'linkedin.com'      => 'LinkedIn',
             'lnkd.in'           => 'LinkedIn',
             'instagram.com'     => 'Instagram',
+            'l.instagram.com'   => 'Instagram',
             'twitter.com'       => 'Twitter',
             'x.com'             => 'X',
             't.co'              => 'X',
@@ -1491,6 +1557,8 @@ class MI_Helper_Reports
             'youtu.be'          => 'YouTube',
             'pinterest.com'     => 'Pinterest',
             'reddit.com'        => 'Reddit',
+            'threads.net'       => 'Threads',
+            'mastodon.social'   => 'Mastodon',
         ];
 
         foreach ($map as $needle => $label) {
@@ -1504,10 +1572,25 @@ class MI_Helper_Reports
             }
         }
 
+        $patterns = [
+            'facebook.'  => 'Facebook',
+            'instagram.' => 'Instagram',
+            'linkedin.'  => 'LinkedIn',
+            'twitter.'   => 'Twitter',
+            'tiktok.'    => 'TikTok',
+            'snapchat.'  => 'Snapchat',
+        ];
+
+        foreach ($patterns as $needle => $label) {
+            if (strpos($host, $needle) !== false) {
+                return $label;
+            }
+        }
+
         return null;
     }
 
-    private function build_new_vs_returning_rows(?array $current, ?array $previous): array
+    private function build_new_vs_returning_rows(?array $current, ?array $previous, ?string $current_label = null, ?string $previous_label = null): array
     {
         $rows = [];
 
@@ -1516,18 +1599,22 @@ class MI_Helper_Reports
         $previous_new = $this->parse_numeric($this->array_value($previous, ['newvsreturn', 'new']));
         $previous_returning = $this->parse_numeric($this->array_value($previous, ['newvsreturn', 'returning']));
 
+        $current_label = $current_label ?? __('Current', 'mi-helper-reports');
+        $previous_label = $previous_label ?? __('Previous', 'mi-helper-reports');
+        $change_label = __('Change', 'mi-helper-reports');
+
         $rows[] = [
             'segment'  => __('New', 'mi-helper-reports'),
-            'current'  => $current_new !== null ? $this->format_percent_value($current_new) : '',
-            'previous' => $previous_new !== null ? $this->format_percent_value($previous_new) : '',
-            'change'   => $this->format_percent_delta($current_new, $previous_new),
+            $current_label  => $current_new !== null ? $this->format_percent_value($current_new) : '',
+            $previous_label => $previous_new !== null ? $this->format_percent_value($previous_new) : '',
+            $change_label   => $this->format_percent_delta($current_new, $previous_new),
         ];
 
         $rows[] = [
             'segment'  => __('Returning', 'mi-helper-reports'),
-            'current'  => $current_returning !== null ? $this->format_percent_value($current_returning) : '',
-            'previous' => $previous_returning !== null ? $this->format_percent_value($previous_returning) : '',
-            'change'   => $this->format_percent_delta($current_returning, $previous_returning),
+            $current_label  => $current_returning !== null ? $this->format_percent_value($current_returning) : '',
+            $previous_label => $previous_returning !== null ? $this->format_percent_value($previous_returning) : '',
+            $change_label   => $this->format_percent_delta($current_returning, $previous_returning),
         ];
 
         return $rows;
@@ -1821,7 +1908,8 @@ class MI_Helper_Reports
         $refs = array_slice($data['referrals'], 0, 5);
         foreach ($refs as $index => $ref) {
             $num = $index + 1;
-            $row['ref_top_' . $num]    = $ref['url'] ?? '';
+            $ref_url = $ref['url'] ?? ($ref['hostname'] ?? '');
+            $row['ref_top_' . $num]    = $ref_url;
             $row['ref_top_' . $num . '_ct'] = isset($ref['sessions']) ? (string) $ref['sessions'] : '';
         }
     }
