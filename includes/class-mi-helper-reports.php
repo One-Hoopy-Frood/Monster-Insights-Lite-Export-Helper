@@ -100,6 +100,7 @@ class MI_Helper_Reports
                 'today'   => current_time('Y-m-d'),
                 'strings' => [
                     'futureDateMessage' => __('Data for MonsterInsights is only available up to today. The end date has been reset to today.', 'mi-helper-reports'),
+                    'noTopPages'        => __('No page data available for this period.', 'mi-helper-reports'),
                 ],
             ]
         );
@@ -209,9 +210,10 @@ class MI_Helper_Reports
                             <select id="mihr-report">
                                 <option value="overview">overview</option>
                                 <option value="monthly">monthly</option>
+                                <option value="top-pages">top 5 website pages</option>
                             </select>
                             <p class="description">
-                                <?php esc_html_e('Overview mirrors MonsterInsights Lite. Monthly returns a single aggregated row with additional deltas and referrer/page breakdowns.', 'mi-helper-reports'); ?>
+                                <?php esc_html_e('Overview mirrors MonsterInsights Lite. Monthly aggregates KPI deltas. Top 5 Website Pages builds a per-month table of the most visited URLs.', 'mi-helper-reports'); ?>
                             </p>
                         </td>
                     </tr>
@@ -252,6 +254,10 @@ class MI_Helper_Reports
           const selectAll  = document.getElementById('mihr-select-all');
           const metricBoxes= Array.from(document.querySelectorAll('.mihr-metric'));
           const reportInput= document.getElementById('mihr-report');
+
+          const settings = window.mihrSettings || {};
+          const strings = settings.strings || {};
+          const noTopPagesText = strings.noTopPages || 'No page data available for this period.';
 
           function esc(s){ return (''+s).replace(/[&<>"']/g, m=>({ '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;','\'':'&#39;' }[m])); }
           function toNumber(x){ const n = typeof x === 'string' ? x.replace(/,/g,'').trim() : x; const f = parseFloat(n); return isFinite(f) ? f : null; }
@@ -298,6 +304,12 @@ class MI_Helper_Reports
           function buildSections(d){
             if (d && d.mihr_mode === 'monthly' && Array.isArray(d.mihr_monthly_rows)) {
               return [{ key:'monthly', title:'Monthly Summary', rows: d.mihr_monthly_rows }];
+            }
+            if (d && d.mihr_mode === 'top-pages') {
+              const rows = Array.isArray(d.mihr_top_pages_rows) ? d.mihr_top_pages_rows : [];
+              const summary = d.mihr_period_summary ? `<p><strong>${esc(d.mihr_period_summary)}</strong></p>` : '';
+              const emptyText = rows.length ? '' : noTopPagesText;
+              return [{ key:'top-pages', title:'Top 5 Website Pages', rows, summaryHtml: summary, emptyText }];
             }
 
             const sections = [];
@@ -385,14 +397,19 @@ class MI_Helper_Reports
             const csvMap = {};
             sections.forEach(sec => {
               const { html, csv } = renderTable(sec.title, sec.rows);
+              const summary = sec.summaryHtml || '';
+
               if (html){
                 const btnId = `mihr-dl-${sec.key}`;
-                parts.push(html + `<p><button type="button" class="button" id="${btnId}">Download ${esc(sec.title)} CSV</button></p>`);
+                parts.push(summary + html + `<p><button type="button" class="button" id="${btnId}">Download ${esc(sec.title)} CSV</button></p>`);
                 csvMap[sec.key] = csv;
                 setTimeout(() => {
                   const el = document.getElementById(btnId);
                   if (el) el.addEventListener('click', ()=> downloadCSV(csv, `mi-${sec.key}.csv`));
                 }, 0);
+              } else if (summary) {
+                const message = sec.emptyText ? `<p>${esc(sec.emptyText)}</p>` : '';
+                parts.push(summary + message);
               }
             });
 
@@ -502,6 +519,14 @@ class MI_Helper_Reports
             wp_send_json_success($payload);
         }
 
+        if ('top-pages' === $report) {
+            $payload = $this->build_top_pages_payload($start, $end, $included);
+            if (is_wp_error($payload)) {
+                wp_send_json_error($payload->get_error_message());
+            }
+            wp_send_json_success($payload);
+        }
+
         $args = ['start' => $start, 'end' => $end];
         if ($included) {
             $args['included_metrics'] = $included;
@@ -546,6 +571,60 @@ class MI_Helper_Reports
         return [
             'mihr_mode'         => 'monthly',
             'mihr_monthly_rows' => [$row],
+        ];
+    }
+
+    private function build_top_pages_payload(string $start, string $end, string $included)
+    {
+        $periods = $this->generate_monthly_periods($start, $end);
+        if (empty($periods)) {
+            return new \WP_Error('mihr-periods', __('Unable to determine time slices for this range.', 'mi-helper-reports'));
+        }
+
+        $rows  = [];
+        $steps = count($periods);
+
+        foreach ($periods as $slice) {
+            $args = [
+                'start' => $slice['start'],
+                'end'   => $slice['end'],
+            ];
+            if ($included) {
+                $args['included_metrics'] = $included;
+            }
+
+            $data = $this->request_monsterinsights_report('overview', $args);
+            if (is_wp_error($data)) {
+                return $data;
+            }
+
+            if (!empty($data['toppages']) && is_array($data['toppages'])) {
+                $ranked = array_slice($data['toppages'], 0, 5);
+                foreach ($ranked as $index => $page) {
+                    $rows[] = [
+                        'period' => $slice['label'],
+                        'year'   => $slice['year'],
+                        'month'  => $slice['month'],
+                        'rank'   => (string) ($index + 1),
+                        'url'    => $page['url'] ?? '',
+                        'title'  => $page['title'] ?? '',
+                        'hostname' => $page['hostname'] ?? '',
+                        'sessions' => isset($page['sessions']) ? (string) $page['sessions'] : '',
+                    ];
+                }
+            }
+        }
+
+        $summary = $this->format_period_summary($start, $end) . ' — ' . sprintf(
+            /* translators: %d processed slices */
+            __('%d monthly slice(s) processed.', 'mi-helper-reports'),
+            $steps
+        );
+
+        return [
+            'mihr_mode'            => 'top-pages',
+            'mihr_period_summary'  => $summary,
+            'mihr_top_pages_rows'  => $rows,
         ];
     }
 
@@ -632,6 +711,68 @@ class MI_Helper_Reports
             'start' => $prev_start->format('Y-m-d'),
             'end'   => $prev_end->format('Y-m-d'),
         ];
+    }
+
+    private function generate_monthly_periods(string $start, string $end): array
+    {
+        $start_obj = $this->create_date_from_string($start);
+        $end_obj   = $this->create_date_from_string($end);
+
+        if (!$start_obj || !$end_obj || $start_obj > $end_obj) {
+            return [];
+        }
+
+        $periods = [];
+        $cursor  = $start_obj->modify('first day of this month');
+        $end_ts  = $end_obj->getTimestamp();
+        $start_ts = $start_obj->getTimestamp();
+
+        while ($cursor->getTimestamp() <= $end_ts) {
+            $slice_start = $cursor;
+            if ($slice_start->getTimestamp() < $start_ts) {
+                $slice_start = $start_obj;
+            }
+
+            $slice_end = $cursor->modify('last day of this month');
+            if ($slice_end->getTimestamp() > $end_ts) {
+                $slice_end = $end_obj;
+            }
+
+            $periods[] = [
+                'start' => $slice_start->format('Y-m-d'),
+                'end'   => $slice_end->format('Y-m-d'),
+                'year'  => $slice_start->format('Y'),
+                'month' => $slice_start->format('m'),
+                'label' => $slice_start->format('F Y'),
+            ];
+
+            $cursor = $cursor->modify('first day of next month');
+        }
+
+        return $periods;
+    }
+
+    private function format_period_summary(string $start, string $end): string
+    {
+        $start_obj = $this->create_date_from_string($start);
+        $end_obj   = $this->create_date_from_string($end);
+
+        if (!$start_obj || !$end_obj) {
+            return '';
+        }
+
+        $days = (int) $end_obj->diff($start_obj)->format('%a') + 1;
+        $interval = $start_obj->diff($end_obj);
+        $years = (int) $interval->format('%y');
+        $months = (int) $interval->format('%m');
+
+        return sprintf(
+            /* translators: 1: total days 2: years 3: months */
+            __('%1$d day(s) in period (%2$d year(s), %3$d month(s))', 'mi-helper-reports'),
+            $days,
+            $years,
+            $months
+        );
     }
 
     private function transform_monthly_row(array $current, ?array $previous, string $start, string $end): array
