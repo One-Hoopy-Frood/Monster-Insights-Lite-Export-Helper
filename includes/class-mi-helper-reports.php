@@ -306,10 +306,24 @@ class MI_Helper_Reports
               return [{ key:'monthly', title:'Monthly Summary', rows: d.mihr_monthly_rows }];
             }
             if (d && d.mihr_mode === 'top-pages') {
-              const rows = Array.isArray(d.mihr_top_pages_rows) ? d.mihr_top_pages_rows : [];
-              const summary = d.mihr_period_summary ? `<p><strong>${esc(d.mihr_period_summary)}</strong></p>` : '';
-              const emptyText = rows.length ? '' : noTopPagesText;
-              return [{ key:'top-pages', title:'Top 5 Website Pages', rows, summaryHtml: summary, emptyText }];
+              const allRows = Array.isArray(d.mihr_top_pages_rows) ? d.mihr_top_pages_rows : [];
+              const summaryRows = Array.isArray(d.mihr_top_pages_summary_rows) ? d.mihr_top_pages_summary_rows : [];
+              const summaryText = d.mihr_period_summary ? `<p><strong>${esc(d.mihr_period_summary)}</strong></p>` : '';
+              const sections = [];
+
+              if (summaryRows.length || summaryText) {
+                sections.push({
+                  key: 'top-pages-summary',
+                  title: 'Top 5 Website Pages (overall)',
+                  rows: summaryRows,
+                  summaryHtml: summaryText,
+                  emptyText: summaryRows.length ? '' : noTopPagesText
+                });
+              }
+
+              const emptyText = allRows.length ? '' : noTopPagesText;
+              sections.push({ key:'top-pages', title:'Top 5 Website Pages (monthly)', rows: allRows, summaryHtml: '', emptyText });
+              return sections;
             }
 
             const sections = [];
@@ -407,7 +421,7 @@ class MI_Helper_Reports
                   const el = document.getElementById(btnId);
                   if (el) el.addEventListener('click', ()=> downloadCSV(csv, `mi-${sec.key}.csv`));
                 }, 0);
-              } else if (summary) {
+              } else if (summary || sec.emptyText) {
                 const message = sec.emptyText ? `<p>${esc(sec.emptyText)}</p>` : '';
                 parts.push(summary + message);
               }
@@ -581,8 +595,9 @@ class MI_Helper_Reports
             return new \WP_Error('mihr-periods', __('Unable to determine time slices for this range.', 'mi-helper-reports'));
         }
 
-        $rows  = [];
-        $steps = count($periods);
+        $rows         = [];
+        $agg         = [];
+        $steps        = count($periods);
 
         foreach ($periods as $slice) {
             $args = [
@@ -601,6 +616,7 @@ class MI_Helper_Reports
             if (!empty($data['toppages']) && is_array($data['toppages'])) {
                 $ranked = array_slice($data['toppages'], 0, 5);
                 foreach ($ranked as $index => $page) {
+                    $sessions_val = $this->parse_numeric($page['sessions'] ?? '') ?? 0.0;
                     $rows[] = [
                         'period' => $slice['label'],
                         'year'   => $slice['year'],
@@ -611,6 +627,22 @@ class MI_Helper_Reports
                         'hostname' => $page['hostname'] ?? '',
                         'sessions' => isset($page['sessions']) ? (string) $page['sessions'] : '',
                     ];
+
+                    $agg_key = $page['url'] ?? '';
+                    if ($agg_key === '') {
+                        continue;
+                    }
+
+                    if (!isset($agg[$agg_key])) {
+                        $agg[$agg_key] = [
+                            'url'      => $page['url'] ?? '',
+                            'title'    => $page['title'] ?? '',
+                            'hostname' => $page['hostname'] ?? '',
+                            'sessions' => 0.0,
+                        ];
+                    }
+
+                    $agg[$agg_key]['sessions'] += $sessions_val;
                 }
             }
         }
@@ -621,9 +653,32 @@ class MI_Helper_Reports
             $steps
         );
 
+        $summary_rows = [];
+        if (!empty($agg)) {
+            uasort($agg, static function ($a, $b) {
+                return $b['sessions'] <=> $a['sessions'];
+            });
+
+            $rank = 1;
+            foreach (array_slice($agg, 0, 5) as $item) {
+                $summary_rows[] = [
+                    'period'   => __('Entire Period', 'mi-helper-reports'),
+                    'year'     => '',
+                    'month'    => '',
+                    'rank'     => (string) $rank,
+                    'url'      => $item['url'],
+                    'title'    => $item['title'],
+                    'hostname' => $item['hostname'],
+                    'sessions' => number_format((float) $item['sessions']),
+                ];
+                $rank++;
+            }
+        }
+
         return [
             'mihr_mode'            => 'top-pages',
             'mihr_period_summary'  => $summary,
+            'mihr_top_pages_summary_rows' => $summary_rows,
             'mihr_top_pages_rows'  => $rows,
         ];
     }
