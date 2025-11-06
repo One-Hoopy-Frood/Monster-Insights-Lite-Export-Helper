@@ -211,6 +211,12 @@ class MI_Helper_Reports
                                 <option value="overview">overview</option>
                                 <option value="monthly">monthly</option>
                                 <option value="top-pages">top 5 website pages</option>
+                                <option value="traffic-overview">traffic overview</option>
+                                <option value="channel-breakdown">channel breakdown</option>
+                                <option value="social-snapshot">social snapshot</option>
+                                <option value="referral-partners">referral partners</option>
+                                <option value="blog-vs-traffic">blog vs traffic</option>
+                                <option value="comparative-trends">comparative trends</option>
                             </select>
                             <p class="description">
                                 <?php esc_html_e('Overview mirrors MonsterInsights Lite. Monthly aggregates KPI deltas. Top 5 Website Pages builds a per-month table of the most visited URLs.', 'mi-helper-reports'); ?>
@@ -302,6 +308,21 @@ class MI_Helper_Reports
           }
 
           function buildSections(d){
+            if (Array.isArray(d.mihr_sections) && d.mihr_sections.length) {
+              return d.mihr_sections.map((sec, index) => {
+                const rows = Array.isArray(sec.rows) ? sec.rows : [];
+                return {
+                  key: sec.key || `custom-${index}`,
+                  title: sec.title || `Section ${index + 1}`,
+                  rows,
+                  summaryHtml: sec.summary ? `<p><strong>${esc(sec.summary)}</strong></p>` : '',
+                  emptyText: sec.emptyText || '',
+                  notes: Array.isArray(sec.notes) ? sec.notes : [],
+                  downloadLabel: sec.downloadLabel || null,
+                };
+              });
+            }
+
             if (d && d.mihr_mode === 'monthly' && Array.isArray(d.mihr_monthly_rows)) {
               return [{ key:'monthly', title:'Monthly Summary', rows: d.mihr_monthly_rows }];
             }
@@ -412,18 +433,21 @@ class MI_Helper_Reports
             sections.forEach(sec => {
               const { html, csv } = renderTable(sec.title, sec.rows);
               const summary = sec.summaryHtml || '';
+              const notes = Array.isArray(sec.notes) ? sec.notes.map(note => `<p>${esc(note)}</p>`).join('') : '';
+              const header = summary + notes;
 
               if (html){
                 const btnId = `mihr-dl-${sec.key}`;
-                parts.push(summary + html + `<p><button type="button" class="button" id="${btnId}">Download ${esc(sec.title)} CSV</button></p>`);
+                const downloadLabel = sec.downloadLabel ? esc(sec.downloadLabel) : `Download ${esc(sec.title)} CSV`;
+                parts.push(header + html + `<p><button type="button" class="button" id="${btnId}">${downloadLabel}</button></p>`);
                 csvMap[sec.key] = csv;
                 setTimeout(() => {
                   const el = document.getElementById(btnId);
                   if (el) el.addEventListener('click', ()=> downloadCSV(csv, `mi-${sec.key}.csv`));
                 }, 0);
-              } else if (summary || sec.emptyText) {
+              } else if (summary || notes || sec.emptyText) {
                 const message = sec.emptyText ? `<p>${esc(sec.emptyText)}</p>` : '';
-                parts.push(summary + message);
+                parts.push(header + message);
               }
             });
 
@@ -535,6 +559,54 @@ class MI_Helper_Reports
 
         if ('top-pages' === $report) {
             $payload = $this->build_top_pages_payload($start, $end, $included);
+            if (is_wp_error($payload)) {
+                wp_send_json_error($payload->get_error_message());
+            }
+            wp_send_json_success($payload);
+        }
+
+        if ('traffic-overview' === $report) {
+            $payload = $this->build_traffic_overview_payload($start, $end, $included);
+            if (is_wp_error($payload)) {
+                wp_send_json_error($payload->get_error_message());
+            }
+            wp_send_json_success($payload);
+        }
+
+        if ('channel-breakdown' === $report) {
+            $payload = $this->build_channel_breakdown_payload($start, $end, $included);
+            if (is_wp_error($payload)) {
+                wp_send_json_error($payload->get_error_message());
+            }
+            wp_send_json_success($payload);
+        }
+
+        if ('social-snapshot' === $report) {
+            $payload = $this->build_social_snapshot_payload($start, $end, $included);
+            if (is_wp_error($payload)) {
+                wp_send_json_error($payload->get_error_message());
+            }
+            wp_send_json_success($payload);
+        }
+
+        if ('referral-partners' === $report) {
+            $payload = $this->build_referral_partners_payload($start, $end, $included);
+            if (is_wp_error($payload)) {
+                wp_send_json_error($payload->get_error_message());
+            }
+            wp_send_json_success($payload);
+        }
+
+        if ('blog-vs-traffic' === $report) {
+            $payload = $this->build_blog_vs_traffic_payload($start, $end, $included);
+            if (is_wp_error($payload)) {
+                wp_send_json_error($payload->get_error_message());
+            }
+            wp_send_json_success($payload);
+        }
+
+        if ('comparative-trends' === $report) {
+            $payload = $this->build_comparative_trends_payload($start, $end, $included);
             if (is_wp_error($payload)) {
                 wp_send_json_error($payload->get_error_message());
             }
@@ -683,6 +755,326 @@ class MI_Helper_Reports
         ];
     }
 
+    private function build_traffic_overview_payload(string $start, string $end, string $included)
+    {
+        $current_args = ['start' => $start, 'end' => $end];
+        if ($included) {
+            $current_args['included_metrics'] = $included;
+        }
+
+        $current = $this->request_monsterinsights_report('overview', $current_args);
+        if (is_wp_error($current)) {
+            return $current;
+        }
+
+        $previous = null;
+        $range = $this->compute_previous_range($start, $end);
+        if ($range) {
+            $previous_args = ['start' => $range['start'], 'end' => $range['end']];
+            if ($included) {
+                $previous_args['included_metrics'] = $included;
+            }
+            $previous = $this->request_monsterinsights_report('overview', $previous_args);
+            if (is_wp_error($previous)) {
+                $previous = null;
+            }
+        }
+
+        $sections = [];
+        $period_summary = $this->format_period_summary($start, $end);
+
+        $sections[] = [
+            'key'     => 'traffic-overview-headline',
+            'title'   => __('Overall Visits', 'mi-helper-reports'),
+            'summary' => $period_summary,
+            'rows'    => $this->build_metric_comparison_rows($current, $previous, [
+                'sessions',
+                'totalusers',
+                'pageviews',
+            ]),
+        ];
+
+        $sections[] = [
+            'key'   => 'traffic-overview-engagement',
+            'title' => __('Engagement Pulse', 'mi-helper-reports'),
+            'rows'  => $this->build_metric_comparison_rows($current, $previous, [
+                'duration',
+                'bounce_rate',
+                'engagedSessions',
+            ]),
+            'notes' => [
+                __('Average session duration is reported in MonsterInsights format. Percentage change compares the selected period with the prior period.', 'mi-helper-reports'),
+            ],
+        ];
+
+        $sections[] = [
+            'key'   => 'traffic-overview-devices',
+            'title' => __('Device Mix', 'mi-helper-reports'),
+            'rows'  => $this->build_device_rows($current),
+            'emptyText' => __('Device share information is unavailable for the selected period.', 'mi-helper-reports'),
+        ];
+
+        return [
+            'mihr_mode'     => 'custom',
+            'mihr_sections' => $sections,
+        ];
+    }
+
+    private function build_channel_breakdown_payload(string $start, string $end, string $included)
+    {
+        $current_args = ['start' => $start, 'end' => $end];
+        if ($included) {
+            $current_args['included_metrics'] = $included;
+        }
+
+        $current = $this->request_monsterinsights_report('overview', $current_args);
+        if (is_wp_error($current)) {
+            return $current;
+        }
+
+        $total_sessions = $this->metric_raw_value($current, 'sessions') ?? 0.0;
+        $channels = $this->estimate_channel_shares($current, $total_sessions);
+
+        $rows = [];
+        foreach ($channels as $item) {
+            $share = $total_sessions > 0 ? $this->format_percent_value(($item['sessions'] / $total_sessions) * 100) : '';
+            $rows[] = [
+                'channel'  => $item['label'],
+                'sessions' => $this->format_number($item['sessions']),
+                'share'    => $share,
+            ];
+        }
+
+        return [
+            'mihr_mode'     => 'custom',
+            'mihr_sections' => [
+                [
+                    'key'       => 'channel-breakdown',
+                    'title'     => __('Channel Breakdown', 'mi-helper-reports'),
+                    'summary'   => $this->format_period_summary($start, $end),
+                    'rows'      => $rows,
+                    'emptyText' => __('Channel shares could not be calculated from the available data.', 'mi-helper-reports'),
+                    'notes'     => [
+                        __('Social and referral shares are estimated from the top referral sources. Direct/Other is computed as remaining traffic.', 'mi-helper-reports'),
+                    ],
+                ],
+            ],
+        ];
+    }
+
+    private function build_social_snapshot_payload(string $start, string $end, string $included)
+    {
+        $current_args = ['start' => $start, 'end' => $end];
+        if ($included) {
+            $current_args['included_metrics'] = $included;
+        }
+
+        $current = $this->request_monsterinsights_report('overview', $current_args);
+        if (is_wp_error($current)) {
+            return $current;
+        }
+
+        $total_sessions = $this->metric_raw_value($current, 'sessions') ?? 0.0;
+        $sources = $this->collect_social_sources($current);
+
+        $rows = [];
+        $social_total = array_sum($sources);
+
+        foreach ($sources as $network => $sessions) {
+            $rows[] = [
+                'network'         => $network,
+                'sessions'        => $this->format_number($sessions),
+                'share_of_social' => $social_total > 0 ? $this->format_percent_value(($sessions / $social_total) * 100) : '',
+                'share_of_total'  => $total_sessions > 0 ? $this->format_percent_value(($sessions / $total_sessions) * 100) : '',
+            ];
+        }
+
+        return [
+            'mihr_mode'     => 'custom',
+            'mihr_sections' => [
+                [
+                    'key'       => 'social-snapshot',
+                    'title'     => __('Social Snapshot', 'mi-helper-reports'),
+                    'summary'   => $this->format_period_summary($start, $end),
+                    'rows'      => $rows,
+                    'emptyText' => __('No social traffic was detected for the selected period.', 'mi-helper-reports'),
+                    'notes'     => [
+                        __('Social traffic is approximated from referral hosts for popular social networks.', 'mi-helper-reports'),
+                    ],
+                ],
+            ],
+        ];
+    }
+
+    private function build_referral_partners_payload(string $start, string $end, string $included)
+    {
+        $current_args = ['start' => $start, 'end' => $end];
+        if ($included) {
+            $current_args['included_metrics'] = $included;
+        }
+
+        $current = $this->request_monsterinsights_report('overview', $current_args);
+        if (is_wp_error($current)) {
+            return $current;
+        }
+
+        $rows = [];
+        if (!empty($current['referrals']) && is_array($current['referrals'])) {
+            foreach ($current['referrals'] as $entry) {
+                $host = $this->parse_host($entry['url'] ?? '');
+                if ($host === '' || $this->is_social_host($host)) {
+                    continue;
+                }
+
+                $sessions = $this->parse_numeric($entry['sessions'] ?? '') ?? 0.0;
+                if ($sessions <= 0) {
+                    continue;
+                }
+
+                $rows[] = [
+                    'referrer' => $host,
+                    'url'      => $entry['url'] ?? '',
+                    'sessions' => $this->format_number($sessions),
+                ];
+            }
+        }
+
+        return [
+            'mihr_mode'     => 'custom',
+            'mihr_sections' => [
+                [
+                    'key'       => 'referral-partners',
+                    'title'     => __('Referral Partners', 'mi-helper-reports'),
+                    'summary'   => $this->format_period_summary($start, $end),
+                    'rows'      => $rows,
+                    'emptyText' => __('No referral partners were returned for the selected period.', 'mi-helper-reports'),
+                ],
+            ],
+        ];
+    }
+
+    private function build_blog_vs_traffic_payload(string $start, string $end, string $included)
+    {
+        $current_args = ['start' => $start, 'end' => $end];
+        if ($included) {
+            $current_args['included_metrics'] = $included;
+        }
+
+        $current = $this->request_monsterinsights_report('overview', $current_args);
+        if (is_wp_error($current)) {
+            return $current;
+        }
+
+        $blog_posts = $this->count_blog_posts($start, $end);
+        $sessions   = $this->metric_raw_value($current, 'sessions') ?? 0.0;
+        $pageviews  = $this->metric_raw_value($current, 'pageviews');
+        if ($pageviews === null) {
+            $pageviews = $this->metric_raw_value($current, 'screenPageViews') ?? 0.0;
+        }
+
+        $rows = [
+            [
+                'metric' => __('Published posts', 'mi-helper-reports'),
+                'value'  => $this->format_number($blog_posts),
+            ],
+            [
+                'metric' => __('Sessions', 'mi-helper-reports'),
+                'value'  => $this->format_number($sessions),
+            ],
+            [
+                'metric' => __('Pageviews', 'mi-helper-reports'),
+                'value'  => $this->format_number($pageviews),
+            ],
+        ];
+
+        if ($blog_posts > 0) {
+            $rows[] = [
+                'metric' => __('Sessions per post', 'mi-helper-reports'),
+                'value'  => $this->format_number($sessions / $blog_posts, 1),
+            ];
+            $rows[] = [
+                'metric' => __('Pageviews per post', 'mi-helper-reports'),
+                'value'  => $this->format_number($pageviews / $blog_posts, 1),
+            ];
+        }
+
+        return [
+            'mihr_mode'     => 'custom',
+            'mihr_sections' => [
+                [
+                    'key'     => 'blog-vs-traffic',
+                    'title'   => __('Blog Output vs. Traffic', 'mi-helper-reports'),
+                    'summary' => $this->format_period_summary($start, $end),
+                    'rows'    => $rows,
+                    'notes'   => [
+                        __('Sessions and pageviews reflect MonsterInsights overview data for the selected period.', 'mi-helper-reports'),
+                    ],
+                ],
+            ],
+        ];
+    }
+
+    private function build_comparative_trends_payload(string $start, string $end, string $included)
+    {
+        $current_args = ['start' => $start, 'end' => $end];
+        if ($included) {
+            $current_args['included_metrics'] = $included;
+        }
+
+        $current = $this->request_monsterinsights_report('overview', $current_args);
+        if (is_wp_error($current)) {
+            return $current;
+        }
+
+        $previous = null;
+        $range = $this->compute_previous_range($start, $end);
+        if ($range) {
+            $previous_args = ['start' => $range['start'], 'end' => $range['end']];
+            if ($included) {
+                $previous_args['included_metrics'] = $included;
+            }
+            $previous = $this->request_monsterinsights_report('overview', $previous_args);
+            if (is_wp_error($previous)) {
+                $previous = null;
+            }
+        }
+
+        $sections = [];
+
+        $sections[] = [
+            'key'   => 'comparative-headline',
+            'title' => __('Period vs. Previous', 'mi-helper-reports'),
+            'summary' => $this->format_period_summary($start, $end),
+            'rows'  => $this->build_metric_comparison_rows($current, $previous, [
+                'sessions',
+                'totalusers',
+                'pageviews',
+                'engagedSessions',
+            ]),
+        ];
+
+        $sections[] = [
+            'key'   => 'comparative-engagement',
+            'title' => __('Engagement & Quality', 'mi-helper-reports'),
+            'rows'  => $this->build_metric_comparison_rows($current, $previous, [
+                'duration',
+                'bounce_rate',
+                'new_users',
+            ]),
+        ];
+
+        $sections[] = [
+            'key'   => 'comparative-new-vs-returning',
+            'title' => __('New vs. Returning Visitors', 'mi-helper-reports'),
+            'rows'  => $this->build_new_vs_returning_rows($current, $previous),
+        ];
+
+        return [
+            'mihr_mode'     => 'custom',
+            'mihr_sections' => $sections,
+        ];
+    }
+
     private function request_monsterinsights_report(string $report, array $args)
     {
         $api = $this->make_api_client($report, $args);
@@ -828,6 +1220,249 @@ class MI_Helper_Reports
             $years,
             $months
         );
+    }
+
+    private function build_metric_comparison_rows(?array $current, ?array $previous, array $keys): array
+    {
+        $labels = [
+            'sessions'        => __('Sessions', 'mi-helper-reports'),
+            'totalusers'      => __('Users', 'mi-helper-reports'),
+            'pageviews'       => __('Pageviews', 'mi-helper-reports'),
+            'engagedSessions' => __('Engaged sessions', 'mi-helper-reports'),
+            'duration'        => __('Avg. session duration', 'mi-helper-reports'),
+            'bounce_rate'     => __('Bounce rate', 'mi-helper-reports'),
+            'new_users'       => __('New users', 'mi-helper-reports'),
+        ];
+
+        $rows = [];
+        foreach ($keys as $key) {
+            $label = $labels[$key] ?? ucfirst(str_replace('_', ' ', $key));
+            [$current_display, $current_raw] = $this->extract_metric_pair($current, $key);
+            [$previous_display, $previous_raw] = $this->extract_metric_pair($previous, $key);
+
+            $change = $this->format_percent_change($current_raw, $previous_raw);
+
+            $rows[] = [
+                'metric'   => $label,
+                'current'  => $current_display,
+                'previous' => $previous_display,
+                'change'   => $change,
+            ];
+        }
+
+        return $rows;
+    }
+
+    private function build_device_rows(?array $current): array
+    {
+        if (empty($current['devices']) || !is_array($current['devices'])) {
+            return [];
+        }
+
+        $rows = [];
+        foreach ($current['devices'] as $device => $share) {
+            $rows[] = [
+                'device' => ucfirst(strtolower($device)),
+                'share'  => $share,
+            ];
+        }
+
+        return $rows;
+    }
+
+    private function estimate_channel_shares(array $current, float $total_sessions): array
+    {
+        $social_sources = $this->collect_social_sources($current);
+        $social_total   = array_sum($social_sources);
+
+        $referral_total = 0.0;
+        if (!empty($current['referrals']) && is_array($current['referrals'])) {
+            foreach ($current['referrals'] as $entry) {
+                $host = $this->parse_host($entry['url'] ?? '');
+                if ($host === '' || $this->is_social_host($host)) {
+                    continue;
+                }
+                $referral_total += $this->parse_numeric($entry['sessions'] ?? '') ?? 0.0;
+            }
+        }
+
+        $direct = $total_sessions - ($social_total + $referral_total);
+        if ($direct < 0) {
+            $direct = 0.0;
+        }
+
+        return [
+            [
+                'label'    => __('Direct / Other', 'mi-helper-reports'),
+                'sessions' => $direct,
+            ],
+            [
+                'label'    => __('Social', 'mi-helper-reports'),
+                'sessions' => $social_total,
+            ],
+            [
+                'label'    => __('Referral', 'mi-helper-reports'),
+                'sessions' => $referral_total,
+            ],
+        ];
+    }
+
+    private function collect_social_sources(array $current): array
+    {
+        $totals = [];
+
+        if (!empty($current['referrals']) && is_array($current['referrals'])) {
+            foreach ($current['referrals'] as $entry) {
+                $host = $this->parse_host($entry['url'] ?? '');
+                if ($host === '') {
+                    continue;
+                }
+
+                $label = $this->get_social_label_for_host($host);
+                if (!$label) {
+                    continue;
+                }
+
+                $sessions = $this->parse_numeric($entry['sessions'] ?? '') ?? 0.0;
+                if ($sessions <= 0) {
+                    continue;
+                }
+
+                if (!isset($totals[$label])) {
+                    $totals[$label] = 0.0;
+                }
+
+                $totals[$label] += $sessions;
+            }
+        }
+
+        return $totals;
+    }
+
+    private function parse_host(string $url): string
+    {
+        if ($url === '') {
+            return '';
+        }
+
+        $parts = wp_parse_url($url);
+        if (!isset($parts['host'])) {
+            return '';
+        }
+
+        return strtolower($parts['host']);
+    }
+
+    private function is_social_host(string $host): bool
+    {
+        return (bool) $this->get_social_label_for_host($host);
+    }
+
+    private function get_social_label_for_host(string $host): ?string
+    {
+        $map = [
+            'facebook.com'      => 'Facebook',
+            'm.facebook.com'    => 'Facebook',
+            'l.facebook.com'    => 'Facebook',
+            'web.facebook.com'  => 'Facebook',
+            'linkedin.com'      => 'LinkedIn',
+            'lnkd.in'           => 'LinkedIn',
+            'instagram.com'     => 'Instagram',
+            'twitter.com'       => 'Twitter',
+            'x.com'             => 'X',
+            't.co'              => 'X',
+            'youtube.com'       => 'YouTube',
+            'youtu.be'          => 'YouTube',
+            'pinterest.com'     => 'Pinterest',
+            'reddit.com'        => 'Reddit',
+        ];
+
+        foreach ($map as $needle => $label) {
+            if ($host === $needle) {
+                return $label;
+            }
+
+            $suffix = '.' . $needle;
+            if (strlen($host) > strlen($suffix) && substr($host, -strlen($suffix)) === $suffix) {
+                return $label;
+            }
+        }
+
+        return null;
+    }
+
+    private function build_new_vs_returning_rows(?array $current, ?array $previous): array
+    {
+        $rows = [];
+
+        $current_new = $this->parse_numeric($this->array_value($current, ['newvsreturn', 'new']));
+        $current_returning = $this->parse_numeric($this->array_value($current, ['newvsreturn', 'returning']));
+        $previous_new = $this->parse_numeric($this->array_value($previous, ['newvsreturn', 'new']));
+        $previous_returning = $this->parse_numeric($this->array_value($previous, ['newvsreturn', 'returning']));
+
+        $rows[] = [
+            'segment'  => __('New', 'mi-helper-reports'),
+            'current'  => $current_new !== null ? $this->format_percent_value($current_new) : '',
+            'previous' => $previous_new !== null ? $this->format_percent_value($previous_new) : '',
+            'change'   => $this->format_percent_delta($current_new, $previous_new),
+        ];
+
+        $rows[] = [
+            'segment'  => __('Returning', 'mi-helper-reports'),
+            'current'  => $current_returning !== null ? $this->format_percent_value($current_returning) : '',
+            'previous' => $previous_returning !== null ? $this->format_percent_value($previous_returning) : '',
+            'change'   => $this->format_percent_delta($current_returning, $previous_returning),
+        ];
+
+        return $rows;
+    }
+
+    private function extract_metric_pair(?array $data, string $key): array
+    {
+        if ($data === null) {
+            return ['', null];
+        }
+
+        if ($key === 'duration') {
+            $display = $this->metric_display_value($data, 'duration') ?? '';
+            $raw = $this->parse_duration_seconds($display);
+            return [$display, $raw];
+        }
+
+        if ($key === 'bounce_rate') {
+            $display = $this->metric_display_value($data, 'bounce_rate') ?? '';
+            $raw = $this->parse_percentage($display);
+            return [$display, $raw];
+        }
+
+        $display = $this->metric_display_value($data, $key) ?? '';
+        $raw = $this->metric_raw_value($data, $key);
+
+        return [$display, $raw];
+    }
+
+    private function format_number(float $value, int $precision = 0): string
+    {
+        return number_format($value, $precision);
+    }
+
+    private function format_percent_value(float $value, int $precision = 1): string
+    {
+        return number_format($value, $precision) . '%';
+    }
+
+    private function format_percent_delta(?float $current, ?float $previous): string
+    {
+        if ($current === null || $previous === null) {
+            return '';
+        }
+
+        $delta = $current - $previous;
+        if (abs($delta) < 0.0001) {
+            return '0.0%';
+        }
+
+        return sprintf('%+0.1f%%', $delta);
     }
 
     private function transform_monthly_row(array $current, ?array $previous, string $start, string $end): array
